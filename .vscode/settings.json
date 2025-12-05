@@ -1,0 +1,6 @@
+{
+    "java.project.referencedLibraries": [
+        "BD2_ProyectoFinal/lib/**/*.jar",
+        "c:/Users/USUARIO/Documents/UNMSM/BD2/BD2FINAL/ProyectoBD2/BD2_ProyectoFinal/lib/ojdbc8.jar"
+    ]
+}
