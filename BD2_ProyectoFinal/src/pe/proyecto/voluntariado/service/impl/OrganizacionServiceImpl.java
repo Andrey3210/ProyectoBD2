@@ -1,10 +1,10 @@
 package pe.proyecto.voluntariado.service.impl;
 
+import java.util.List;
 import pe.proyecto.voluntariado.dao.OrganizacionDAO;
 import pe.proyecto.voluntariado.dao.impl.OrganizacionDAOImpl;
 import pe.proyecto.voluntariado.model.Organizacion;
 import pe.proyecto.voluntariado.service.OrganizacionService;
-import java.util.List;
 
 public class OrganizacionServiceImpl implements OrganizacionService {
 
@@ -34,7 +34,7 @@ public class OrganizacionServiceImpl implements OrganizacionService {
     public void insertar(Organizacion organizacion) throws Exception {
         dao.insertar(organizacion);
     }
-    
+
     @Override
     public void modificar(Organizacion organizacion) throws Exception {  // ← NUEVO
         dao.modificar(organizacion);
