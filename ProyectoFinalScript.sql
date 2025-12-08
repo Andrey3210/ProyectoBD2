@@ -34,7 +34,7 @@ BEGIN
         BEGIN
             IF i.object_type = 'TABLE' THEN
                 EXECUTE IMMEDIATE 'DROP TABLE ' || i.object_name || ' CASCADE CONSTRAINTS';
-            ELSIF i.object_type = 'View' THEN
+            ELSIF i.object_type = 'VIEW' THEN
                 EXECUTE IMMEDIATE 'DROP VIEW ' || i.object_name;
             ELSIF i.object_type = 'PACKAGE' THEN
                 EXECUTE IMMEDIATE 'DROP PACKAGE ' || i.object_name;
@@ -143,6 +143,20 @@ JOIN Voluntario v ON d.voluntario_id = v.voluntario_id
 JOIN Organizacion o ON d.organizacion_id = o.organizacion_id
 JOIN Tipo_donacion td ON d.tipo_donacion_id = td.tipo_donacion_id;
 
+
+
+CREATE OR REPLACE VIEW Vista_Donaciones AS
+SELECT 
+    d.donacion_id AS ID, v.nombres || ' ' || v.apellidos AS nombre_voluntario,
+    o.nombre AS nombre_organizacion, td.nombre AS tipo_donacion,
+    d.cantidad, d.fecha, d.calificacion, d.voluntario_id, d.organizacion_id, d.tipo_donacion_id
+FROM Donacion d
+JOIN Voluntario v ON d.voluntario_id = v.voluntario_id
+JOIN Organizacion o ON d.organizacion_id = o.organizacion_id
+JOIN Tipo_donacion td ON d.tipo_donacion_id = td.tipo_donacion_id
+ORDER BY d.fecha DESC;
+
+
 CREATE OR REPLACE VIEW Vista_Actividades AS
 SELECT 
     a.actividad_id AS ID, o.nombre AS nombre_organizacion, c.nombre AS nombre_categoria,
@@ -153,13 +167,19 @@ JOIN Organizacion o ON a.organizacion_id = o.organizacion_id
 JOIN Categoria c ON a.categoria_id = c.categoria_id
 ORDER BY a.fecha_inicio DESC;
 
+
+
 CREATE OR REPLACE VIEW Organizaciones_Activas AS
 SELECT organizacion_id, nombre, direccion, telefono, email, fecha_registro
 FROM Organizacion WHERE UPPER(estado) = 'ACTIVA';  -- Corregido a 'ACTIVA' para coincidir con el paquete
 
+
+
 CREATE OR REPLACE VIEW Organizaciones_Inactivas AS
 SELECT organizacion_id, nombre, direccion, telefono, email, fecha_registro
 FROM Organizacion WHERE UPPER(estado) = 'INACTIVO';
+
+
 
 CREATE OR REPLACE VIEW Vista_Asignaciones AS
 SELECT 
@@ -172,16 +192,6 @@ JOIN Actividad a ON aa.actividad_id = a.actividad_id
 JOIN Categoria c ON a.categoria_id = c.categoria_id
 ORDER BY aa.fecha DESC;
 
-CREATE OR REPLACE VIEW Vista_Donaciones AS
-SELECT 
-    d.donacion_id AS ID, v.nombres || ' ' || v.apellidos AS nombre_voluntario,
-    o.nombre AS nombre_organizacion, td.nombre AS tipo_donacion,
-    d.cantidad, d.fecha, d.calificacion, d.voluntario_id, d.organizacion_id, d.tipo_donacion_id
-FROM Donacion d
-JOIN Voluntario v ON d.voluntario_id = v.voluntario_id
-JOIN Organizacion o ON d.organizacion_id = o.organizacion_id
-JOIN Tipo_donacion td ON d.tipo_donacion_id = td.tipo_donacion_id
-ORDER BY d.fecha DESC;
 
 -- =============================================================================
 -- 5. PAQUETES (Lógica de Negocio Refactorizada)
@@ -226,9 +236,11 @@ END PKG_ADMIN_CORE;
 /
 
 -- 5.2. PAQUETE VOLUNTARIADO
--- 1. Primero la ESPECIFICACIÓN (El contrato)
+    -- 5.2. PAQUETE VOLUNTARIADO (ESPECIFICACIÓN)
 CREATE OR REPLACE PACKAGE PKG_VOLUNTARIADO AS
-    -- === SECCIÓN VOLUNTARIOS ===
+    -- Hacemos pública esta función para que el Trigger la pueda usar:
+    FUNCTION Calcular_Estado_Actividad(p_f_inicio DATE, p_f_fin DATE) RETURN VARCHAR2;
+
     PROCEDURE Registrar_Voluntario(p_dni VARCHAR2, p_nombres VARCHAR2, p_apellidos VARCHAR2, p_fecha_nac DATE, p_email VARCHAR2, p_telefono VARCHAR2, p_direccion VARCHAR2, p_estado_civil VARCHAR2);
     PROCEDURE Modificar_Voluntario(p_id NUMBER, p_dni VARCHAR2, p_nombres VARCHAR2, p_apellidos VARCHAR2, p_fecha_nac DATE, p_email VARCHAR2, p_telefono VARCHAR2, p_direccion VARCHAR2, p_estado_civil VARCHAR2);
     PROCEDURE Listar_Voluntarios(p_cursor OUT SYS_REFCURSOR);
@@ -236,38 +248,33 @@ CREATE OR REPLACE PACKAGE PKG_VOLUNTARIADO AS
     PROCEDURE Buscar_Voluntario_Por_DNI(p_dni IN VARCHAR2, p_cursor OUT SYS_REFCURSOR);
     PROCEDURE Buscar_Voluntarios_Filtro(p_texto IN VARCHAR2, p_cursor OUT SYS_REFCURSOR);
 
-    -- === SECCIÓN ACTIVIDADES ===
     PROCEDURE Registrar_Actividad(p_org_id NUMBER, p_cat_id NUMBER, p_nombre VARCHAR2, p_desc VARCHAR2, p_ubicacion VARCHAR2, p_f_inicio DATE, p_f_fin DATE);
     PROCEDURE Modificar_Actividad(p_id NUMBER, p_org_id NUMBER, p_cat_id NUMBER, p_nombre VARCHAR2, p_desc VARCHAR2, p_ubicacion VARCHAR2, p_f_inicio DATE, p_f_fin DATE);
     PROCEDURE Listar_Actividades(p_cursor OUT SYS_REFCURSOR);
     PROCEDURE Buscar_Actividad_Por_ID(p_id IN NUMBER, p_cursor OUT SYS_REFCURSOR);
     PROCEDURE Buscar_Actividades_Filtro(p_texto IN VARCHAR2, p_cursor OUT SYS_REFCURSOR);
 
-    -- === SECCIÓN ASIGNACIONES ===
     PROCEDURE Asignar_Voluntario(p_vol_id NUMBER, p_act_id NUMBER, p_calif NUMBER DEFAULT NULL);
     PROCEDURE Modificar_Asignacion(p_id NUMBER, p_vol_id NUMBER, p_act_id NUMBER, p_estado VARCHAR2, p_calif NUMBER);
     PROCEDURE Listar_Asignaciones(p_cursor OUT SYS_REFCURSOR);
     PROCEDURE Buscar_Asignacion_Por_ID(p_id IN NUMBER, p_cursor OUT SYS_REFCURSOR);
-
-    -- === UTILITARIOS ===
-    FUNCTION Calcular_Estado_Actividad(p_f_inicio DATE, p_f_fin DATE) RETURN VARCHAR2; 
 END PKG_VOLUNTARIADO;
 /
-
--- 2. Ahora el CUERPO COMPLETO (La lógica)
+    
 CREATE OR REPLACE PACKAGE BODY PKG_VOLUNTARIADO AS
-
-    -- Función auxiliar privada
     FUNCTION Calcular_Estado_Actividad(p_f_inicio DATE, p_f_fin DATE) RETURN VARCHAR2 IS
     BEGIN
-        IF p_f_inicio > SYSDATE THEN RETURN 'Programada';
-        ELSIF p_f_inicio <= SYSDATE AND (p_f_fin IS NULL OR p_f_fin > SYSDATE) THEN RETURN 'En curso';
-        ELSE RETURN 'Finalizada';
+        IF p_f_inicio > SYSDATE THEN 
+            RETURN 'Programada';
+        ELSIF p_f_inicio <= SYSDATE AND (p_f_fin IS NULL OR p_f_fin > SYSDATE) THEN 
+            RETURN 'En curso';
+        ELSE 
+            RETURN 'Finalizada';
         END IF;
-    END;
+    END Calcular_Estado_Actividad;
 
     -- ========================================================
-    -- IMPLEMENTACIÓN DE VOLUNTARIOS (Restaurada)
+    -- SECCIÓN VOLUNTARIOS
     -- ========================================================
     PROCEDURE Registrar_Voluntario(p_dni VARCHAR2, p_nombres VARCHAR2, p_apellidos VARCHAR2, p_fecha_nac DATE, p_email VARCHAR2, p_telefono VARCHAR2, p_direccion VARCHAR2, p_estado_civil VARCHAR2) IS
     BEGIN
@@ -275,40 +282,41 @@ CREATE OR REPLACE PACKAGE BODY PKG_VOLUNTARIADO AS
         VALUES (p_dni, p_nombres, p_apellidos, p_fecha_nac, p_email, p_telefono, p_direccion, p_estado_civil);
         COMMIT;
     EXCEPTION WHEN DUP_VAL_ON_INDEX THEN ROLLBACK; RAISE_APPLICATION_ERROR(-20010, 'DNI o Email duplicado.');
-    END;
+    END Registrar_Voluntario;
 
     PROCEDURE Modificar_Voluntario(p_id NUMBER, p_dni VARCHAR2, p_nombres VARCHAR2, p_apellidos VARCHAR2, p_fecha_nac DATE, p_email VARCHAR2, p_telefono VARCHAR2, p_direccion VARCHAR2, p_estado_civil VARCHAR2) IS
     BEGIN
         UPDATE Voluntario SET dni=p_dni, nombres=p_nombres, apellidos=p_apellidos, fecha_nacimiento=p_fecha_nac, email=p_email, telefono=p_telefono, direccion=p_direccion, estado_civil=p_estado_civil
         WHERE voluntario_id = p_id;
         COMMIT;
-    END;
+    END Modificar_Voluntario;
 
     PROCEDURE Listar_Voluntarios(p_cursor OUT SYS_REFCURSOR) IS
     BEGIN
         OPEN p_cursor FOR SELECT * FROM Voluntario ORDER BY apellidos;
-    END;
+    END Listar_Voluntarios;
 
     PROCEDURE Buscar_Voluntario_Por_ID(p_id IN NUMBER, p_cursor OUT SYS_REFCURSOR) IS
     BEGIN
         OPEN p_cursor FOR SELECT * FROM Voluntario WHERE voluntario_id = p_id;
-    END;
+    END Buscar_Voluntario_Por_ID;
 
     PROCEDURE Buscar_Voluntario_Por_DNI(p_dni IN VARCHAR2, p_cursor OUT SYS_REFCURSOR) IS
     BEGIN
         OPEN p_cursor FOR SELECT * FROM Voluntario WHERE dni = p_dni;
-    END;
+    END Buscar_Voluntario_Por_DNI;
 
     PROCEDURE Buscar_Voluntarios_Filtro(p_texto IN VARCHAR2, p_cursor OUT SYS_REFCURSOR) IS
     BEGIN
         OPEN p_cursor FOR SELECT * FROM Voluntario 
         WHERE UPPER(dni) LIKE UPPER('%'||p_texto||'%') OR UPPER(apellidos) LIKE UPPER('%'||p_texto||'%')
         ORDER BY fecha_registro DESC;
-    END;
+    END Buscar_Voluntarios_Filtro;
 
     -- ========================================================
-    -- IMPLEMENTACIÓN DE ACTIVIDADES
+    -- SECCIÓN ACTIVIDADES
     -- ========================================================
+    
     PROCEDURE Registrar_Actividad(p_org_id NUMBER, p_cat_id NUMBER, p_nombre VARCHAR2, p_desc VARCHAR2, p_ubicacion VARCHAR2, p_f_inicio DATE, p_f_fin DATE) IS
         v_estado VARCHAR2(20);
     BEGIN
@@ -316,7 +324,7 @@ CREATE OR REPLACE PACKAGE BODY PKG_VOLUNTARIADO AS
         INSERT INTO Actividad (organizacion_id, categoria_id, nombre, descripcion, ubicacion, fecha_inicio, fecha_fin, estado)
         VALUES (p_org_id, p_cat_id, p_nombre, p_desc, p_ubicacion, p_f_inicio, p_f_fin, v_estado);
         COMMIT;
-    END;
+    END Registrar_Actividad;
 
     PROCEDURE Modificar_Actividad(p_id NUMBER, p_org_id NUMBER, p_cat_id NUMBER, p_nombre VARCHAR2, p_desc VARCHAR2, p_ubicacion VARCHAR2, p_f_inicio DATE, p_f_fin DATE) IS
         v_estado VARCHAR2(20);
@@ -328,7 +336,7 @@ CREATE OR REPLACE PACKAGE BODY PKG_VOLUNTARIADO AS
             fecha_fin = p_f_fin, estado = v_estado
         WHERE actividad_id = p_id;
         COMMIT;
-    END;
+    END Modificar_Actividad;
 
     PROCEDURE Listar_Actividades(p_cursor OUT SYS_REFCURSOR) IS
     BEGIN
@@ -340,7 +348,7 @@ CREATE OR REPLACE PACKAGE BODY PKG_VOLUNTARIADO AS
             JOIN Organizacion o ON a.organizacion_id = o.organizacion_id
             JOIN Categoria c ON a.categoria_id = c.categoria_id
             ORDER BY a.fecha_inicio DESC;
-    END;
+    END Listar_Actividades;
 
     PROCEDURE Buscar_Actividad_Por_ID(p_id IN NUMBER, p_cursor OUT SYS_REFCURSOR) IS
     BEGIN
@@ -352,7 +360,7 @@ CREATE OR REPLACE PACKAGE BODY PKG_VOLUNTARIADO AS
             JOIN Organizacion o ON a.organizacion_id = o.organizacion_id
             JOIN Categoria c ON a.categoria_id = c.categoria_id
             WHERE a.actividad_id = p_id;
-    END;
+    END Buscar_Actividad_Por_ID;
 
     PROCEDURE Buscar_Actividades_Filtro(p_texto IN VARCHAR2, p_cursor OUT SYS_REFCURSOR) IS
     BEGIN
@@ -366,10 +374,10 @@ CREATE OR REPLACE PACKAGE BODY PKG_VOLUNTARIADO AS
             WHERE UPPER(a.nombre) LIKE UPPER('%'||p_texto||'%')
                OR UPPER(o.nombre) LIKE UPPER('%'||p_texto||'%')
             ORDER BY a.fecha_inicio DESC;
-    END;
+    END Buscar_Actividades_Filtro;
 
     -- ========================================================
-    -- IMPLEMENTACIÓN DE ASIGNACIONES
+    -- SECCIÓN ASIGNACIONES
     -- ========================================================
     PROCEDURE Asignar_Voluntario(p_vol_id NUMBER, p_act_id NUMBER, p_calif NUMBER DEFAULT NULL) IS
         v_existe NUMBER;
@@ -380,7 +388,7 @@ CREATE OR REPLACE PACKAGE BODY PKG_VOLUNTARIADO AS
         INSERT INTO Asignacion_actividades (voluntario_id, actividad_id, estado, calificacion, fecha)
         VALUES (p_vol_id, p_act_id, 'Pendiente', p_calif, SYSDATE);
         COMMIT;
-    END;
+    END Asignar_Voluntario;
 
     PROCEDURE Modificar_Asignacion(p_id NUMBER, p_vol_id NUMBER, p_act_id NUMBER, p_estado VARCHAR2, p_calif NUMBER) IS
     BEGIN
@@ -388,7 +396,7 @@ CREATE OR REPLACE PACKAGE BODY PKG_VOLUNTARIADO AS
             voluntario_id = p_vol_id, actividad_id = p_act_id, estado = p_estado, calificacion = p_calif
         WHERE asignacion_id = p_id;
         COMMIT;
-    END;
+    END Modificar_Asignacion;
 
     PROCEDURE Listar_Asignaciones(p_cursor OUT SYS_REFCURSOR) IS
     BEGIN
@@ -400,7 +408,7 @@ CREATE OR REPLACE PACKAGE BODY PKG_VOLUNTARIADO AS
             JOIN Voluntario v ON aa.voluntario_id = v.voluntario_id
             JOIN Actividad a ON aa.actividad_id = a.actividad_id
             ORDER BY aa.fecha DESC;
-    END;
+    END Listar_Asignaciones;
 
     PROCEDURE Buscar_Asignacion_Por_ID(p_id IN NUMBER, p_cursor OUT SYS_REFCURSOR) IS
     BEGIN
@@ -412,10 +420,11 @@ CREATE OR REPLACE PACKAGE BODY PKG_VOLUNTARIADO AS
             JOIN Voluntario v ON aa.voluntario_id = v.voluntario_id
             JOIN Actividad a ON aa.actividad_id = a.actividad_id
             WHERE aa.asignacion_id = p_id;
-    END;
+    END Buscar_Asignacion_Por_ID;
 
 END PKG_VOLUNTARIADO;
 /
+
 
 
 -- 5.3. PAQUETE DONACIONES
@@ -464,6 +473,7 @@ CREATE OR REPLACE PACKAGE BODY PKG_DONACIONES AS
     END;
 END PKG_DONACIONES;
 /
+
 
 -- 5.4. PAQUETE REPORTES
 CREATE OR REPLACE PACKAGE PKG_REPORTES AS
